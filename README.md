@@ -26,7 +26,10 @@ Fresnel Zone Visualization
 TO RUN THIS CODE LOCALLY 
 
 PULL REQUEST: git clone https://github.com/manoj097/rf-link-planner.git
+
 CHANGE DIRECTORY: cd rf-link-planner
+
 INSTALL DEPENDENCIES: npm install 
                       npm install leaflet react-leaflet
+                      
 TO RUN: npm start
