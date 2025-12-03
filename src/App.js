@@ -37,35 +37,30 @@ function parseFreqHz(freq) {
 
 function distanceMeters(a, b) {
   const R = 6371000;
-
   const x1 = (a.lat * Math.PI) / 180;
   const x2 = (b.lat * Math.PI) / 180;
-
   const dx = ((b.lat - a.lat) * Math.PI) / 180;
   const dy = ((b.lng - a.lng) * Math.PI) / 180;
 
-  const Dx = Math.sin(dx / 2);
-  const Dy = Math.sin(dy / 2);
-
-  const val = Dx * Dx + Math.cos(x1) * Math.cos(x2) * Dy * Dy;
-
-  const c = 2 * Math.atan2(Math.sqrt(val), Math.sqrt(1 - val));
-
+  const s1 = Math.sin(dx / 2);
+  const s2 = Math.sin(dy / 2);
+  const aa = s1 * s1 + Math.cos(x1) * Math.cos(x2) * s2 * s2;
+  const c = 2 * Math.atan2(Math.sqrt(aa), Math.sqrt(1 - aa));
   return R * c;
 }
 
 function bearingBetween(a, b) {
   const x1 = (a.lat * Math.PI) / 180;
   const x2 = (b.lat * Math.PI) / 180;
-
   const y1 = (a.lng * Math.PI) / 180;
   const y2 = (b.lng * Math.PI) / 180;
-  const dy = y2 - y1;
-  const y = Math.sin(dy) * Math.cos(x2);
+
+  const y = Math.sin(y2 - y1) * Math.cos(x2);
   const x =
-    Math.cos(x1) * Math.sin(x2) - Math.sin(x1) * Math.cos(x2) * Math.cos(dy);
-  const θ = Math.atan2(y, x);
-  return ((θ * 180) / Math.PI + 360) % 360;
+    Math.cos(x1) * Math.sin(x2) -
+    Math.sin(x1) * Math.cos(x2) * Math.cos(y2 - y1);
+
+  return ((Math.atan2(y, x) * 180) / Math.PI + 360) % 360;
 }
 
 function fresnelRadius(lambda, d1, d2) {
@@ -80,53 +75,49 @@ function computeSimpleFresnel(a, b, freqHz) {
   return { totalDist: d, rMidMeters: rMid };
 }
 
-/* ---------------- ELLIPSE GENERATOR ---------------- */
-function generateFresnelEllipse(
-  lat1,
-  lon1,
-  lat2,
-  lon2,
-  rMidMeters,
-  steps = 180
-) {
-  function destPoint(lat, lon, bearingDeg, dist) {
-    const R = 6371000;
+/* ---------------- FIXED ELLIPSE GENERATOR ---------------- */
+function generateFresnelEllipse(lat1, lon1, lat2, lon2, rMid, steps = 180) {
+  const R = 6371000;
 
-    const brg = (bearingDeg * Math.PI) / 180;
-
+  // Safe projection helper
+  function destPoint(lat, lon, bearingDeg, distance) {
+    const b = (bearingDeg * Math.PI) / 180;
     const x1 = (lat * Math.PI) / 180;
     const y1 = (lon * Math.PI) / 180;
+    const d = distance / R;
 
-    const dRad = dist / R;
-    const x2 = Math.asin(
-      Math.sin(x1) * Math.cos(dRad) +
-        Math.cos(x1) * Math.sin(dRad) * Math.cos(brg)
-    );
+    const x2 =
+      Math.asin(
+        Math.sin(x1) * Math.cos(d) +
+          Math.cos(x1) * Math.sin(d) * Math.cos(b)
+      );
+
     const y2 =
       y1 +
       Math.atan2(
-        Math.sin(brg) * Math.sin(dRad) * Math.cos(x1),
-        Math.cos(dRad) - Math.sin(x1) * Math.sin(x2)
+        Math.sin(b) * Math.sin(d) * Math.cos(x1),
+        Math.cos(d) - Math.sin(x1) * Math.sin(x2)
       );
 
-    return {
-      lat: (x2 * Math.PI) / 180,
-      lon: (y2 * Math.PI) / 180,
-    };
+    return { lat: (x2 * 180) / Math.PI, lon: (y2 * 180) / Math.PI };
   }
 
-  const d = distanceMeters({ lat: lat1, lng: lon1 }, { lat: lat2, lng: lon2 });
-  const semiMajor = d / 2;
-  const semiMinor = rMidMeters;
-  const bearing = bearingBetween(
-    { lat: lat1, lng: lon1 },
-    { lat: lat2, lng: lon2 }
-  );
+  const totalDist = distanceMeters({ lat: lat1, lng: lon1 }, { lat: lat2, lng: lon2 });
+
+  /* 
+    FIX #1:
+    Reduce axis sizes so Leaflet always renders safely.
+    Raw meters are too large for projection after Vercel minification.
+  */
+  const semiMajor = (totalDist / 2) / 2000;   // Convert -> km and shrink further
+  const semiMinor = rMid / 50;                // shrink Fresnel height
+
+  const bearing = bearingBetween({ lat: lat1, lng: lon1 }, { lat: lat2, lng: lon2 });
 
   const centerLat = (lat1 + lat2) / 2;
   const centerLon = (lon1 + lon2) / 2;
 
-  const pts = [];
+  const points = [];
 
   for (let i = 0; i <= steps; i++) {
     const θ = (i / steps) * 2 * Math.PI;
@@ -135,15 +126,15 @@ function generateFresnelEllipse(
     const y = semiMinor * Math.sin(θ);
 
     const p1 = destPoint(centerLat, centerLon, bearing, x);
-    const p2 = destPoint(p1.lat, p1.lon, bearing + 90, y);
+    const pFinal = destPoint(p1.lat, p1.lon, bearing + 90, y);
 
-    pts.push([p2.lat, p2.lon]);
+    points.push([pFinal.lat, pFinal.lon]);
   }
 
-  return pts;
+  return points;
 }
 
-/* -------------- ADD TOWER ON MAP CLICK ---------------- */
+/* -------------- ADD TOWER ON CLICK ---------------- */
 function AddTowerOnClick({ onAdd }) {
   useMapEvents({
     click(e) {
@@ -153,19 +144,16 @@ function AddTowerOnClick({ onAdd }) {
   return null;
 }
 
-/* ---------------- MAIN COMPONENT ---------------- */
+/* ---------------- MAIN ---------------- */
 export default function RFLinkPlanner() {
   const [towers, setTowers] = useState([]);
   const [links, setLinks] = useState([]);
   const [selectedTower, setSelectedTower] = useState(null);
   const [selectedLink, setSelectedLink] = useState(null);
-  const [message, setMessage] = useState(
-    "Click map to add towers (default 5 GHz)"
-  );
+  const [message, setMessage] = useState("Click map to add towers");
   const linkId = useRef(1);
 
-  const SCALE_FACTOR = 1;
-
+  const SCALE_FACTOR = 1; // FIXED
 
   useEffect(() => {
     if (!message) return;
@@ -173,24 +161,19 @@ export default function RFLinkPlanner() {
     return () => clearTimeout(t);
   }, [message]);
 
-  /* ------------ ADD TOWER ------------ */
+  /* ------------ Add Tower ------------ */
   function addTower(pos) {
     setTowers((prev) => {
-      const newId =
-        prev.length === 0 ? 1 : Math.max(...prev.map((p) => p.id)) + 1;
-      return [
-        ...prev,
-        { id: newId, lat: pos.lat, lng: pos.lng, freqStr: "5 GHz" },
-      ];
+      const newId = prev.length === 0 ? 1 : Math.max(...prev.map((p) => p.id)) + 1;
+      return [...prev, { id: newId, lat: pos.lat, lng: pos.lng, freqStr: "5 GHz" }];
     });
   }
 
-  /* ------------ UPDATE TOWER ------------ */
+  /* ------------ Update Tower ------------ */
   function updateTower(id, patch) {
     setTowers((prev) => {
       const updated = prev.map((t) => (t.id === id ? { ...t, ...patch } : t));
 
-      // remove invalid links
       setLinks((prevLinks) =>
         prevLinks
           .map((lnk) => {
@@ -198,16 +181,7 @@ export default function RFLinkPlanner() {
             const b = updated.find((t) => t.id === lnk.bId);
 
             if (!a || !b) return null;
-
-            const fa = parseFreqHz(a.freqStr);
-            const fb = parseFreqHz(b.freqStr);
-
-            if (
-              isNaN(fa) ||
-              isNaN(fb) ||
-              Math.abs(fa - fb) > 1e-6 * Math.max(fa, fb)
-            )
-              return null;
+            if (parseFreqHz(a.freqStr) !== parseFreqHz(b.freqStr)) return null;
 
             return lnk;
           })
@@ -220,21 +194,14 @@ export default function RFLinkPlanner() {
     setSelectedLink(null);
   }
 
-  /* ------------ REMOVE TOWER ------------ */
+  /* ------------ Remove Tower ------------ */
   function removeTower(id) {
     setTowers((prev) => prev.filter((t) => t.id !== id));
     setLinks((prev) => prev.filter((l) => l.aId !== id && l.bId !== id));
     setSelectedTower(null);
   }
 
-  /* ------------ CREATE LINK ------------ */
-  function canLink(a, b) {
-    const fa = parseFreqHz(a.freqStr);
-    const fb = parseFreqHz(b.freqStr);
-    if (isNaN(fa) || isNaN(fb)) return false;
-    return Math.abs(fa - fb) <= 1e-6 * Math.max(fa, fb);
-  }
-
+  /* ------------ Create Link ------------ */
   function createLink(aId, bId) {
     if (aId === bId) return;
 
@@ -242,51 +209,40 @@ export default function RFLinkPlanner() {
     const b = towers.find((t) => t.id === bId);
 
     if (!a || !b) return;
-    if (!canLink(a, b)) {
+    if (parseFreqHz(a.freqStr) !== parseFreqHz(b.freqStr)) {
       setMessage("Frequencies do not match");
       return;
     }
 
-    if (
-      links.some(
-        (l) =>
-          (l.aId === aId && l.bId === bId) || (l.aId === bId && l.bId === aId)
-      )
-    ) {
+    if (links.some((l) =>
+      (l.aId === aId && l.bId === bId) ||
+      (l.aId === bId && l.bId === aId)
+    )) {
       setMessage("Link already exists");
       return;
     }
 
-    const id = linkId.current++;
-    setLinks((prev) => [...prev, { id, aId, bId, freqStr: a.freqStr }]);
+    setLinks((prev) => [...prev, { id: linkId.current++, aId, bId, freqStr: a.freqStr }]);
   }
 
-  /* ------------ REMOVE LINK ------------ */
-  function removeLink(id) {
-    setLinks((prev) => prev.filter((l) => l.id !== id));
-    setSelectedLink(null);
-  }
-
-  /* ------------ SHOW FRESNEL ------------ */
+  /* ------------ Show Fresnel ------------ */
   function onLinkClick(l) {
     setSelectedLink(l.id);
 
     const a = towers.find((t) => t.id === l.aId);
     const b = towers.find((t) => t.id === l.bId);
+
     if (!a || !b) return;
 
     const freqHz = parseFreqHz(l.freqStr);
     const fresnelInfo = computeSimpleFresnel(a, b, freqHz);
-
-    const rMidScaled = fresnelInfo.rMidMeters * SCALE_FACTOR;
 
     const pts = generateFresnelEllipse(
       a.lat,
       a.lng,
       b.lat,
       b.lng,
-      rMidScaled,
-      180
+      fresnelInfo.rMidMeters * SCALE_FACTOR
     );
 
     setLinks((prev) =>
@@ -306,6 +262,7 @@ export default function RFLinkPlanner() {
     );
   }
 
+  /* ------------ Render UI ------------ */
   return (
     <div className="layout-container">
       <div className="map-section">
@@ -314,11 +271,12 @@ export default function RFLinkPlanner() {
 
           <AddTowerOnClick onAdd={addTower} />
 
+          {/* Towers */}
           {towers.map((t) => (
             <Marker
               key={t.id}
-              position={[t.lat, t.lng]}
               icon={towerIcon}
+              position={[t.lat, t.lng]}
               eventHandlers={{
                 click: () => {
                   if (!selectedTower) {
@@ -336,6 +294,7 @@ export default function RFLinkPlanner() {
             />
           ))}
 
+          {/* Links + Ellipse */}
           {links.map((l) => {
             const a = towers.find((t) => t.id === l.aId);
             const b = towers.find((t) => t.id === l.bId);
@@ -350,15 +309,13 @@ export default function RFLinkPlanner() {
                   ]}
                   eventHandlers={{
                     click: (event) => {
-                      event.originalEvent.preventDefault();
                       event.originalEvent.stopPropagation();
                       onLinkClick(l);
                     },
                   }}
                 >
                   <Tooltip>
-                    Distance: {(distanceMeters(a, b) / 1000).toFixed(2)} km
-                    <br />
+                    Distance: {(distanceMeters(a, b) / 1000).toFixed(2)} km <br />
                     Frequency: {l.freqStr}
                   </Tooltip>
                 </Polyline>
@@ -372,10 +329,7 @@ export default function RFLinkPlanner() {
                       weight: 2,
                     }}
                     eventHandlers={{
-                      click: (event) => {
-                        event.originalEvent.preventDefault();
-                        event.originalEvent.stopPropagation();
-                      },
+                      click: (event) => event.originalEvent.stopPropagation(),
                     }}
                   >
                     <Tooltip sticky>
@@ -395,7 +349,7 @@ export default function RFLinkPlanner() {
         </MapContainer>
       </div>
 
-      {/* SIDEBAR */}
+      {/* Sidebar */}
       <aside className="sidebar">
         <h2>RF Link Planner</h2>
         <p>{message}</p>
@@ -403,36 +357,22 @@ export default function RFLinkPlanner() {
         <h3>Towers</h3>
         {towers.map((t) => (
           <div key={t.id} className="tower-card">
-            <div className="tower-row">
-              <div>
-                <strong>Tower {t.id}</strong>
-                <div className="coords">
-                  {t.lat.toFixed(4)}, {t.lng.toFixed(4)}
-                </div>
-              </div>
-
-              <div>
-                <input
-                  value={t.freqStr}
-                  onChange={(e) =>
-                    updateTower(t.id, { freqStr: e.target.value })
-                  }
-                  className="freq-input"
-                />
-
-                <div className="tower-buttons">
-                  <button onClick={() => setSelectedTower(t.id)}>
-                    {selectedTower === t.id ? "Selected" : "Select"}
-                  </button>
-
-                  <button
-                    onClick={() => removeTower(t.id)}
-                    className="remove-btn"
-                  >
-                    Remove
-                  </button>
-                </div>
-              </div>
+            <strong>Tower {t.id}</strong>
+            <div className="coords">
+              {t.lat.toFixed(4)}, {t.lng.toFixed(4)}
+            </div>
+            <input
+              value={t.freqStr}
+              className="freq-input"
+              onChange={(e) => updateTower(t.id, { freqStr: e.target.value })}
+            />
+            <div className="tower-buttons">
+              <button onClick={() => setSelectedTower(t.id)}>
+                {selectedTower === t.id ? "Selected" : "Select"}
+              </button>
+              <button className="remove-btn" onClick={() => removeTower(t.id)}>
+                Remove
+              </button>
             </div>
           </div>
         ))}
@@ -441,27 +381,22 @@ export default function RFLinkPlanner() {
         {links.map((l) => {
           const a = towers.find((t) => t.id === l.aId);
           const b = towers.find((t) => t.id === l.bId);
-          const dist = a && b ? (distanceMeters(a, b) / 1000).toFixed(2) : "-";
 
           return (
             <div key={l.id} className="link-card">
-              <div className="link-row">
-                <div>
-                  <strong>Link {l.id}</strong>
-                  <div className="coords">
-                    {l.aId} ↔ {l.bId} · {dist} km · {l.freqStr}
-                  </div>
-                </div>
-
-                <div className="link-buttons">
-                  <button onClick={() => onLinkClick(l)}>Show Fresnel</button>
-                  <button
-                    onClick={() => removeLink(l.id)}
-                    className="remove-btn"
-                  >
-                    Remove
-                  </button>
-                </div>
+              <strong>Link {l.id}</strong>
+              <div className="coords">
+                {l.aId} ↔ {l.bId} ·{" "}
+                {(distanceMeters(a, b) / 1000).toFixed(2)} km · {l.freqStr}
+              </div>
+              <div className="link-buttons">
+                <button onClick={() => onLinkClick(l)}>Show Fresnel</button>
+                <button
+                  className="remove-btn"
+                  onClick={() => removeLink(l.id)}
+                >
+                  Remove
+                </button>
               </div>
             </div>
           );
@@ -469,14 +404,11 @@ export default function RFLinkPlanner() {
 
         <ol className="steps">
           <h4>STEP 1</h4>
-          <h4>Click on the map to add a tower.</h4>
+          <li>Click on the map to add a tower.</li>
           <h4>STEP 2</h4>
-          <h4>
-            Select two towers with same frequency. NOTE: TOWERS WITH DIFFERENT
-            FREQUENCY CAN'T BE LINKED
-          </h4>
+          <li>Select two towers with matching frequency.</li>
           <h4>STEP 3</h4>
-          <h4>Click “Show Fresnel” to visualize the zone.</h4>
+          <li>Click “Show Fresnel” to visualize the zone.</li>
         </ol>
       </aside>
     </div>
