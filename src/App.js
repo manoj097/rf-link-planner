@@ -89,31 +89,33 @@ function generateFresnelEllipse(
   rMidMeters,
   steps = 180
 ) {
-  function destPoint(lat, lon, bearingDeg, dist) {
-    const R = 6371000;
+function destPoint(lat, lon, bearingDeg, dist) {
+  const R = 6371000;
+  const brg = (bearingDeg * Math.PI) / 180;
 
-    const brg = (bearingDeg * Math.PI) / 180;
+  const x1 = (lat * Math.PI) / 180;
+  const y1 = (lon * Math.PI) / 180;
 
-    const x1 = (lat * Math.PI) / 180;
-    const y1 = (lon * Math.PI) / 180;
+  const dRad = dist / R;
 
-    const dRad = dist / R;
-    const x2 = Math.asin(
-      Math.sin(x1) * Math.cos(dRad) +
-        Math.cos(x1) * Math.sin(dRad) * Math.cos(brg)
+  const x2 = Math.asin(
+    Math.sin(x1) * Math.cos(dRad) +
+      Math.cos(x1) * Math.sin(dRad) * Math.cos(brg)
+  );
+
+  const y2 =
+    y1 +
+    Math.atan2(
+      Math.sin(brg) * Math.sin(dRad) * Math.cos(x1),
+      Math.cos(dRad) - Math.sin(x1) * Math.sin(x2)
     );
-    const y2 =
-      y1 +
-      Math.atan2(
-        Math.sin(brg) * Math.sin(dRad) * Math.cos(x1),
-        Math.cos(dRad) - Math.sin(x1) * Math.sin(x2)
-      );
 
-    return {
-      lat: (x2 * Math.PI) / 180,
-      lon: (y2 * Math.PI) / 180,
-    };
-  }
+  return {
+    lat: (x2 * 180) / Math.PI,
+    lon: (y2 * 180) / Math.PI,
+  };
+}
+
 
   const d = distanceMeters({ lat: lat1, lng: lon1 }, { lat: lat2, lng: lon2 });
   const semiMajor = d / 2;
