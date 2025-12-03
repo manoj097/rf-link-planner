@@ -164,7 +164,8 @@ export default function RFLinkPlanner() {
   );
   const linkId = useRef(1);
 
-  const SCALE_FACTOR = 400;
+  const SCALE_FACTOR = 1;
+
 
   useEffect(() => {
     if (!message) return;
